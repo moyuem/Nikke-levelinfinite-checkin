@@ -1,9 +1,17 @@
-// 监听 Cloudflare 的 Cron 调度事件，用于定时自动执行
+// Cloudflare Worker Script for Level Infinite Pass Auto Check-in
+// Supports multiple accounts, optional Telegram notifications (summarized),
+// and handles "system error" as potentially "already checked-in".
+// Version: v12
+
+// CONFIGURATION:
+// Set MAX_ACCOUNTS to the highest number X for your LEVEL_INFINITE_COOKIE_X secrets
+const MAX_ACCOUNTS = 20; // Example: if you have COOKIE_1 to COOKIE_5, 5 or more is fine.
+
+// --- Event Listeners ---
 addEventListener('scheduled', event => {
   event.waitUntil(handleScheduled());
 });
 
-// 监听 HTTP Fetch 事件，允许通过访问特定 URL 手动触发打卡，方便测试
 addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (url.pathname === '/manual-checkin') {
@@ -11,121 +19,146 @@ addEventListener('fetch', event => {
   } else {
     event.respondWith(
       new Response(
-        'Cloudflare Worker for Level Infinite Pass Check-in. Access /manual-checkin to trigger manually.',
+        'Cloudflare Worker for Level Infinite Pass Check-in. Access /manual-checkin to trigger for all configured accounts.',
         { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
       )
     );
   }
 });
 
+// --- Optional: Telegram Notification Function ---
 /**
- * 发送 Telegram 通知的函数
- * @param {string} messageText - 要发送的消息内容
- * @param {boolean} isSuccess - 标记消息是否为成功通知 (用于格式化)
+ * Sends a single summarized Telegram notification.
+ * @param {string} title - The title of the notification.
+ * @param {string} summaryMessageText - The fully formatted summary message body.
  */
-async function sendTelegramNotification(messageText, isSuccess = true) {
-  const botToken = TELEGRAM_BOT_TOKEN; // 从 Secrets 获取
-  const chatId = TELEGRAM_CHAT_ID;     // 从 Secrets 获取
+async function sendTelegramSummaryNotification(title, summaryMessageText) {
+  const botToken = globalThis.TELEGRAM_BOT_TOKEN; // Read from Secrets
+  const chatId = globalThis.TELEGRAM_CHAT_ID;     // Read from Secrets
 
   if (!botToken || !chatId) {
-    console.error('Telegram Bot Token 或 Chat ID 未在 Secrets 中配置，跳过发送通知。');
+    console.log(`Telegram notification skipped (Token or Chat ID not configured). Title: ${title}`);
     return;
   }
 
-  const prefix = isSuccess ? "✅ 打卡成功" : "❌ 打卡失败";
-  const fullMessage = `${prefix}\n\n${messageText}`;
-
+  const fullMessage = `**${title}**\n\n${summaryMessageText}`;
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   const payload = {
     chat_id: chatId,
     text: fullMessage,
-    parse_mode: 'Markdown' // 可选: Markdown, HTML
+    parse_mode: 'Markdown'
   };
 
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-
     const responseData = await response.json();
     if (response.ok && responseData.ok) {
-      console.log('Telegram 通知已成功发送。');
+      console.log(`Telegram summary notification sent successfully. Title: ${title}`);
     } else {
-      console.error('发送 Telegram 通知失败:', responseData);
+      console.error(`Failed to send Telegram summary notification. Title: ${title}`, responseData);
     }
   } catch (error) {
-    console.error('发送 Telegram 通知时发生网络错误:', error);
+    console.error(`Network error sending Telegram summary notification. Title: ${title}`, error);
   }
 }
 
+// --- Core Logic ---
+function getCookiesFromSecrets() {
+  const cookiesArray = [];
+  for (let i = 1; i <= MAX_ACCOUNTS; i++) {
+    const secretName = `LEVEL_INFINITE_COOKIE_${i}`;
+    const cookieValue = globalThis[secretName];
+    if (cookieValue && typeof cookieValue === 'string' && cookieValue.trim() !== '') {
+      cookiesArray.push(cookieValue);
+    } else {
+      break;
+    }
+  }
+  return cookiesArray;
+}
 
-/**
- * 处理手动触发的请求，并返回 JSON 响应
- */
+async function processAllAccounts(triggerType) {
+  const allResults = [];
+  const cookiesArray = getCookiesFromSecrets();
+  const notificationTitle = `LIP 打卡报告 - ${triggerType}`;
+  let summaryMessageLines = [];
+
+  if (cookiesArray.length === 0) {
+    const noCookieMsg = "没有从 Secrets 中找到任何 LEVEL_INFINITE_COOKIE_X 配置。";
+    console.log(noCookieMsg);
+    summaryMessageLines.push(`系统通知: ${noCookieMsg}`);
+    await sendTelegramSummaryNotification(notificationTitle, summaryMessageLines.join('\n'));
+    return [{ account: "系统配置", success: false, message: noCookieMsg }];
+  }
+
+  console.log(`发现 ${cookiesArray.length} 个账号配置。开始处理 ${triggerType}...`);
+
+  for (let i = 0; i < cookiesArray.length; i++) {
+    const cookie = cookiesArray[i];
+    const accountIdentifier = `账号 ${i + 1}`;
+    console.log(`[${accountIdentifier}] Starting process.`);
+
+    let result;
+    let icon = "❓"; // Default icon
+
+    try {
+      result = await doCheckIn(cookie, accountIdentifier);
+      if (result.isAlreadyCheckedIn) {
+        icon = "ℹ️"; // Info for "already checked-in" or "system error possibly checked-in"
+      } else if (result.success) {
+        icon = "✅"; // Success
+      } else {
+        icon = "❌"; // Failure
+      }
+      summaryMessageLines.push(`${accountIdentifier}: ${icon} ${result.message}`);
+    } catch (error) {
+      console.error(`[${accountIdentifier}] Error during overall processing:`, error);
+      result = { success: false, message: `执行错误: ${error.message}`, details: error.stack, httpStatus: 500, isAlreadyCheckedIn: false };
+      icon = "🆘"; // System/Execution error
+      summaryMessageLines.push(`${accountIdentifier}: ${icon} ${result.message}`);
+    }
+    allResults.push({ account: accountIdentifier, ...result });
+  }
+
+  // Add timestamp to the summary
+  const timestamp = `\n\n⏰ 时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+  const finalSummaryMessage = summaryMessageLines.join('\n') + timestamp;
+
+  await sendTelegramSummaryNotification(notificationTitle, finalSummaryMessage);
+
+  return allResults;
+}
+
 async function handleManualTrigger(event) {
-  let result;
-  try {
-    result = await doCheckIn();
-    // 手动触发时也发送通知 (可选)
-    await sendTelegramNotification(`手动触发结果: ${result.message}`, result.success);
-
-    return new Response(JSON.stringify(result, null, 2), {
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
-      status: result.success ? 200 : (result.httpStatus || 500),
-    });
-  } catch (error) {
-    console.error('Error during manual trigger:', error);
-    await sendTelegramNotification(`手动触发执行错误: ${error.message}`, false);
-    return new Response(JSON.stringify({ success: false, message: error.message, error: error.stack }, null, 2), {
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
-      status: 500,
-    });
-  }
+  console.log('Manual check-in for all accounts started...');
+  const results = await processAllAccounts("手动触发");
+  return new Response(JSON.stringify(results, null, 2), {
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    status: results.every(r => r.success || r.isAlreadyCheckedIn) ? 200 : (results.some(r => r.success || r.isAlreadyCheckedIn) ? 207 : 500),
+  });
 }
 
-/**
- * 处理定时任务 (Cron Trigger)
- */
 async function handleScheduled() {
-  console.log('Scheduled check-in started...');
-  let result;
-  try {
-    result = await doCheckIn();
-    if (result.success) {
-      console.log('Scheduled Check-in successful:', result.message);
-      await sendTelegramNotification(`定时任务结果: ${result.message}`, true);
-    } else {
-      console.error('Scheduled Check-in failed:', result.message, result.details || '');
-      await sendTelegramNotification(`定时任务结果: ${result.message}\n详情: ${JSON.stringify(result.details, null, 2)}`, false);
-    }
-  } catch (error) {
-    console.error('Error during scheduled check-in execution:', error);
-    await sendTelegramNotification(`定时任务执行错误: ${error.message}`, false);
-  }
+  console.log('Scheduled check-in for all accounts started...');
+  await processAllAccounts("定时任务");
 }
 
 /**
- * 执行打卡操作的核心函数
+ * Core function to perform the check-in operation for a single account.
+ * @param {string} cookie - The cookie string for the account.
+ * @param {string} accountIdentifier - Identifier for logging/notification.
+ * @returns {Promise<Object>} An object containing the check-in result, including `isAlreadyCheckedIn` boolean.
  */
-async function doCheckIn() {
-  const cookie = LEVEL_INFINITE_COOKIE; // 从 Secrets 获取
-
-  if (!cookie) {
-    const errorMessage = '错误：LEVEL_INFINITE_COOKIE 未在 Worker Secrets 中设置。请在 Cloudflare 控制台配置。';
-    console.error(errorMessage);
-    return { success: false, message: errorMessage, httpStatus: 500 };
-  }
-
+async function doCheckIn(cookie, accountIdentifier) {
   const CHECKIN_URL = 'https://api-pass.levelinfinite.com/api/rewards/proxy/lipass/Points/DailyCheckIn';
   const REQUEST_METHOD = 'POST';
-
   const REQUEST_HEADERS = {
     'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'zh-HK,zh;q=0.9,tr;q=0.8,ja;q=0.7,en-US;q=0.6,en;q=0.5,zh-CN;q=0.4,zh-TW;q=0.3',
+    'Accept-Language': 'zh-HK,zh;q=0.9', // From user's browser
     'Content-Type': 'application/json',
     'Cookie': cookie,
     'Origin': 'https://pass.levelinfinite.com',
@@ -141,68 +174,81 @@ async function doCheckIn() {
     'X-Common-Params': '{"game_id":"4","area_id":"global","source":"pc_web","lip_region":"392","env":"sg"}',
     'X-Language': 'zh',
   };
+  const REQUEST_BODY = JSON.stringify({ task_id: "15" }); // Ensure this task_id is correct
+  const requestOptions = { method: REQUEST_METHOD, headers: REQUEST_HEADERS, body: REQUEST_BODY };
 
-  const REQUEST_BODY = JSON.stringify({
-    task_id: "15"
-  });
-
-  const requestOptions = {
-    method: REQUEST_METHOD,
-    headers: REQUEST_HEADERS,
-    body: REQUEST_BODY,
-  };
-
-  console.log(`准备发起打卡请求到: ${CHECKIN_URL} 使用方法: ${REQUEST_METHOD}`);
-  // console.log(`请求头: ${JSON.stringify(REQUEST_HEADERS, null, 2)}`); // 避免在日志中打印完整的 Cookie
-  console.log(`请求体: ${REQUEST_BODY}`);
+  console.log(`[${accountIdentifier}] Attempting check-in to: ${CHECKIN_URL}`);
 
   try {
     const response = await fetch(CHECKIN_URL, requestOptions);
     const responseText = await response.text();
-
-    console.log(`打卡 API 响应状态码: ${response.status}`);
-    console.log(`打卡 API 响应体 (原始文本): ${responseText}`);
+    const httpStatus = response.status;
+    console.log(`[${accountIdentifier}] Check-in API response status: ${httpStatus}`);
+    console.log(`[${accountIdentifier}] Check-in API response body (raw): ${responseText.substring(0, 300)}...`);
 
     let checkInSuccess = false;
-    let message = `请求完成。响应状态码: ${response.status}.`;
+    let message = `请求完成。响应状态码: ${httpStatus}.`;
     let responseData = null;
-    let httpStatus = response.status;
+    let isAlreadyCheckedIn = false;
 
     try {
       responseData = JSON.parse(responseText);
     } catch (e) {
-      console.warn('响应体不是有效的 JSON 格式。将作为纯文本处理。');
+      console.warn(`[${accountIdentifier}] Check-in response body is not valid JSON: ${responseText}`);
     }
 
     if (responseData) {
+      // Case 1: Standard successful check-in
       if (response.ok && responseData.code === 0 && responseData.msg === "ok") {
         checkInSuccess = true;
         message = `API 消息: ${responseData.msg}`;
         if (responseData.data && typeof responseData.data.status !== 'undefined') {
-            message += ` | 数据状态: ${responseData.data.status}`;
+          message += ` | 数据状态: ${responseData.data.status}`;
         }
-      } else {
-        message = `API Code: ${responseData.code || 'N/A'}, API Message: ${responseData.msg || responseData.message || 'No message'}`;
       }
-    } else if (response.ok) {
-        message = `请求成功 (HTTP ${response.status})，但响应内容不是预期的JSON格式或解析失败。`;
-        console.warn('Response was OK but not valid JSON or parsing failed.');
-    } else {
-        message = `HTTP 状态码: ${response.status}.`;
-        if (responseText) {
-            message += ` 响应: ${responseText.substring(0, 100)}${responseText.length > 100 ? '...' : ''}`; // 截断过长的响应
-        }
-    }
-    
-    if (response.status === 401 || response.status === 403) {
-        message += ' (通常表示 Cookie 失效或权限不足，请更新 Cookie)。';
+      // Case 2: Specific "system error" that might mean "already checked-in"
+      else if (responseData.code === 1001009 && responseData.msg && responseData.msg.toLowerCase().includes("system error")) {
+        checkInSuccess = false; // It's still a system error, not a confirmed success
+        isAlreadyCheckedIn = true; // But we treat it as "possibly already checked-in" for notification
+        message = `system error，今日可能已签到 (API Code: ${responseData.code})`;
+        console.log(`[${accountIdentifier}] Detected 'system error 1001009' from DailyCheckIn API response.`);
+      }
+      // Case 3: Other "already checked-in" scenarios (user needs to provide this specific code/msg)
+      // TODO: IMPORTANT! Replace 'YOUR_ACTUAL_ALREADY_CHECKED_IN_CODE' and/or message check
+      //       with the *actual* code and/or message from the DailyCheckIn API
+      //       when trying to check in for an ALREADY CHECKED-IN account if it's different from 1001009.
+      //       Example: else if (responseData.code === 20010)
+      else if (responseData.code === 12345 || (responseData.msg && responseData.msg.toLowerCase().includes("已签到")) || (responseData.msg && responseData.msg.toLowerCase().includes("repeated operation"))) {
+        // THIS IS A PLACEHOLDER for a more specific "already checked-in" response - UPDATE WITH ACTUAL VALUES!
+        checkInSuccess = true; // Treat "already checked-in" as a success for the day's automation
+        isAlreadyCheckedIn = true;
+        message = `今日已签到 (API返回: code=${responseData.code}, msg='${responseData.msg}')`;
+        console.log(`[${accountIdentifier}] Detected specific 'already checked-in' from DailyCheckIn API response.`);
+      }
+      // Case 4: Other failures
+      else {
+        checkInSuccess = false;
+        message = `API Code: ${responseData.code || 'N/A'}, API Message: ${responseData.msg || responseData.message || 'No specific message'}`;
+      }
+    } else if (response.ok) { // HTTP OK, but no valid JSON
+      checkInSuccess = false;
+      message = `请求成功 (HTTP ${httpStatus})，但响应内容不是有效的JSON。原始响应: ${responseText.substring(0,100)}...`;
+    } else { // HTTP error
+      checkInSuccess = false;
+      message = `HTTP 状态码: ${httpStatus}.`;
+      if (responseText) {
+        message += ` 响应片段: ${responseText.substring(0, 100)}...`;
+      }
     }
 
-    return { success: checkInSuccess, message: message, details: responseData || responseText, httpStatus: httpStatus };
+    if (!checkInSuccess && !isAlreadyCheckedIn && (httpStatus === 401 || httpStatus === 403)) {
+      message += ' (通常表示 Cookie 失效或权限不足，请更新此账号的 Cookie)。';
+    }
+
+    return { success: checkInSuccess, message: message, details: responseData || responseText, httpStatus: httpStatus, isAlreadyCheckedIn: isAlreadyCheckedIn };
 
   } catch (error) {
-    console.error('执行 fetch 操作时发生网络错误或脚本内部错误:', error);
-    return { success: false, message: `网络或脚本错误: ${error.message}`, details: error.stack, httpStatus: 500 };
+    console.error(`[${accountIdentifier}] Network error or internal script error during fetch:`, error);
+    return { success: false, message: `网络或脚本错误: ${error.message}`, details: error.stack, httpStatus: 500, isAlreadyCheckedIn: false };
   }
 }
-    
