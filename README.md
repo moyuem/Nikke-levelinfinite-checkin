@@ -44,24 +44,6 @@ README.md: 本说明文件。
 
 [浏览器开发者工具网络面板示意图，高亮显示请求头中的 Cookie 字符串]
 
-获取各签到任务“今日已签到”时的 API 响应 (非常重要！用于配置脚本):
-
-对于您希望自动化的每一个签到任务（例如“每日签到”、“阶段签到”等）：
-
-条件： 选择一个您当天已经成功完成了该特定签到任务的账号。确保 Cloudflare Worker Secrets 中对应的 LEVEL_INFINITE_COOKIE_X 设置的是这个已签到账号的 Cookie。
-
-操作： 通过 Cloudflare Worker 的手动触发链接 (例如: https://<您的Worker名称>.<您的子域名>.workers.dev/manual-checkin) 来强制脚本为这个已签到的账号尝试再次调用该特定任务的 API。
-
-捕获： 操作完成后，立即前往 Cloudflare Worker 的 "Logs" (日志) 标签页。找到对应这次手动触发和特定任务的日志。
-
-记录： 在日志中，找到类似 [账号 X] Task '任务名称': API response body (raw): ... 的行。这后面跟着的就是该任务 API 在您尝试重复签到时返回的完整 JSON 响应体。这个 JSON 响应会包含特定的 code 和/或 msg 来表明“今日已签到”或“重复操作”。请务必记下这个确切的 code 值和/或 msg 内容。
-
-例如，对于“每日签到”，响应可能是 {"code": 1001009, "msg": "system error", ...}。
-
-对于“阶段签到”，响应可能是 {"code": 1002007, "msg": "DailyStageCheckIn ... already sign in today", ...}。
-
-配置脚本： 您需要将为每个任务获取到的特定 code (以及可选的 msg 中的关键词) 更新到 worker.js 脚本顶部的 CHECKIN_TASKS 数组中对应任务对象的 already_checked_in_code 和 already_checked_in_msg_keywords 字段。
-
 重要提示： Cookie 有有效期。如果脚本后续运行失败并提示 Cookie 失效，您需要重复步骤 1 获取最新的 Cookie。
 
 第二步：创建和部署 Cloudflare Worker
@@ -78,8 +60,6 @@ README.md: 本说明文件。
 部署成功后，点击 "Quick edit"。
 
 将本项目仓库中的 worker.js (或您指定的脚本文件名) 的内容完整复制并粘贴到 Cloudflare Worker 编辑器中，替换掉原有的默认代码。
-
-根据【第一步第2点】获取的信息，修改 worker.js 脚本中 CHECKIN_TASKS 数组内每个任务的“今日已签到”判断条件 (already_checked_in_code 和 already_checked_in_msg_keywords)。
 
 点击 "Save and Deploy"。
 
@@ -147,14 +127,5 @@ Cookie 有效期: Cookie 过期后，需按【第一步】重新获取并更新�
 
 任务 task_id 的变化： 脚本中 CHECKIN_TASKS 数组里每个任务的 body 中通常包含 task_id。如果这些ID发生变化，您需要通过抓包找到新的 task_id 并更新 worker.js 脚本中对应任务的 body 部分。
 
-贡献
-欢迎提交 Pull Request 或提出 Issues 来改进此项目。
-
 License
-本项目采用 MIT License (建议您在项目中创建一个 LICENSE 文件并写入 MIT 许可证内容)。
-
-使用提示：
-
-请确保您项目仓库中的 worker.js 文件包含最新的、功能正常的 Cloudflare Worker 脚本。
-
-您可以将教程中 [示意图] 的占位符替换为实际的截图，以增强教程的可读性。
+本项目采用 MIT License 
