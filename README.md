@@ -1,6 +1,6 @@
 # **使用 Cloudflare Worker 自动进行 Level Infinite Pass 每日打卡**
 
-本项目利用 Cloudflare Workers 的免费额度，实现对 https://pass.levelinfinite.com/ 网站的每日自动打卡（签到），支持多个签到任务和多个账户。脚本能够识别并正确处理“今日已签到”的情况（需要用户根据实际API响应配置）。用户还可以选择性配置 Telegram Bot 来接收打卡结果的通知。
+本项目利用 Cloudflare Workers 的免费额度，实现对 https://pass.levelinfinite.com/ 网站的每日自动打卡（签到），支持多个签到任务和多个账户。脚本能够识别并正确处理“今日已签到”的情况。用户还可以选择性配置 Telegram Bot 来接收打卡结果的通知。
 
 **核心功能：**
 
@@ -24,6 +24,7 @@
 ## **准备工作**
 
 * 一个 **Cloudflare 账户** ([注册地址](https://dash.cloudflare.com/sign-up))。  
+
 * （可选）如果您希望接收 Telegram 通知，您还需要一个 **Telegram 账户**。
 
 ## **教程步骤**
@@ -35,15 +36,6 @@
    * 打开开发者工具 (F12)，切换到 "网络" (Network) 标签页，勾选 "Preserve log"。  
    * 刷新页面或在网站内进行任意操作，从一个发往 api-pass.levelinfinite.com 或 pass.levelinfinite.com 的请求的 "Request Headers" 中，找到并**完整复制 cookie 字符串**。  
      * \[浏览器开发者工具网络面板示意图，高亮显示请求头中的 Cookie 字符串\]  
-2. **获取各签到任务“今日已签到”时的 API 响应 (非常重要！用于配置脚本):**  
-   * 对于您希望自动化的**每一个签到任务**（例如“每日签到”、“阶段签到”等）：  
-     * **条件：** 选择一个您**当天已经成功完成了该特定签到任务**的账号。确保 Cloudflare Worker Secrets 中对应的 LEVEL\_INFINITE\_COOKIE\_X 设置的是这个已签到账号的 Cookie。  
-     * **操作：** 通过 Cloudflare Worker 的手动触发链接 (例如: https://\<您的Worker名称\>.\<您的子域名\>.workers.dev/manual-checkin) 来强制脚本为这个已签到的账号尝试再次调用该特定任务的 API。  
-     * **捕获：** 操作完成后，立即前往 Cloudflare Worker 的 "Logs" (日志) 标签页。找到对应这次手动触发和特定任务的日志。  
-     * **记录：** 在日志中，找到类似 \[账号 X\] Task '任务名称': API response body (raw): ... 的行。这后面跟着的就是该任务 API 在您尝试重复签到时返回的**完整 JSON 响应体**。这个 JSON 响应会包含特定的 code 和/或 msg 来表明“今日已签到”或“重复操作”。**请务必记下这个确切的 code 值和/或 msg 内容。**  
-       * 例如，对于“每日签到”，响应可能是 {"code": 1001009, "msg": "system error", ...}。  
-       * 对于“阶段签到”，响应可能是 {"code": 1002007, "msg": "DailyStageCheckIn ... already sign in today", ...}。  
-   * **配置脚本：** 您需要将为每个任务获取到的特定 code (以及可选的 msg 中的关键词) 更新到 worker.js 脚本顶部的 CHECKIN\_TASKS 数组中对应任务对象的 already\_checked\_in\_code 和 already\_checked\_in\_msg\_keywords 字段。
 
 **重要提示：** Cookie 有有效期。如果脚本后续运行失败并提示 Cookie 失效，您需要重复步骤 1 获取最新的 Cookie。
 
@@ -56,8 +48,6 @@
 3. **编辑 Worker 代码:**  
    * 部署成功后，点击 "Quick edit"。  
    * **将本项目仓库中的 worker.js (或您指定的脚本文件名) 的内容完整复制并粘贴到 Cloudflare Worker 编辑器中**，替换掉原有的默认代码。  
-   * **根据【第一步第2点】获取的信息，修改 worker.js 脚本中 CHECKIN\_TASKS 数组内每个任务的“今日已签到”判断条件** (already\_checked\_in\_code 和 already\_checked\_in\_msg\_keywords)。  
-   * 点击 "Save and Deploy"。
 
 ### **第三步：配置 Cloudflare Worker Secrets (环境变量)**
 
@@ -107,9 +97,5 @@
 
 ## **License**
 
-本项目采用 [MIT License](http://docs.google.com/LICENSE.md) (请确保项目中有一个名为 LICENSE.md 或 LICENSE 的文件，其中包含 MIT 许可证的文本)。
+本项目采用 [MIT License](http://docs.google.com/LICENSE.md) 
 
-**使用提示：**
-
-* 请确保您项目仓库中的 worker.js 文件包含最新的、功能正常的 Cloudflare Worker 脚本。  
-* 您可以将教程中 \[示意图\] 的占位符替换为实际的截图，以增强教程的可读性。
