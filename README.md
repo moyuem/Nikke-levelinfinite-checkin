@@ -12,7 +12,7 @@
 
 **项目文件：**
 
-* worker.js (或您指定的其他文件名): 包含 Cloudflare Worker 的执行脚本。  
+* worker.js: 包含 Cloudflare Worker 的执行脚本。  
 * README.md: 本说明文件。
 
 **声明：**
