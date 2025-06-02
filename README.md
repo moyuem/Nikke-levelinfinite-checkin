@@ -1,6 +1,6 @@
 # **使用 Cloudflare Worker 自动进行 Level Infinite Pass 每日打卡**
 
-本项目利用 Cloudflare Workers 的免费额度，实现对 https://pass.levelinfinite.com/ 网站的每日自动打卡（签到），支持多个签到任务和多个账户。脚本能够识别并正确处理“今日已签到”的情况。用户还可以选择性配置 Telegram Bot 来接收打卡结果的通知。
+本项目利用 Cloudflare Workers 的免费额度，实现对 https://pass.levelinfinite.com/ 网站的每日自动打卡（签到），支持多个签到任务和多个账户。用户还可以选择性配置 Telegram Bot 来接收打卡结果的通知。
 
 **核心功能：**
 
